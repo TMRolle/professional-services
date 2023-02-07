@@ -27,47 +27,69 @@ import os
 
 TARGET_PUBSUB_TOPIC = os.environ.get("TARGET_PUBSUB_TOPIC")
 
-log_client=google.cloud.logging.Client()
+log_client = google.cloud.logging.Client()
 log_client.setup_logging()
 
-def rounded_mql_time(delta):
-  return f"d'{(datetime.min + round((datetime.utcnow() - datetime.min)/delta) * delta).strftime('%Y/%m/%d %H:%M')}'"
 
-def process_config(scope, queries, asset_client: asset_v1.AssetServiceClient, pubsub_client: pubsub_v1.PublisherClient, executor: ThreadPoolExecutor):
-  futures={}
-  req=asset_v1.ListAssetsRequest()
-  req.asset_types=['compute.googleapis.com/Project']
-  req.parent=scope
-  req.page_size=1000
-  res=asset_client.list_assets(request=req)
-  for asset in res:
-    project=asset.name.split('/')[-1]
-    for metric_name, metric_query in queries.items():
-      metric_query=re.sub('ROUNDED_HOUR', rounded_mql_time(timedelta(minutes=60)), metric_query)
-      metric_query=re.sub('ROUNDED_30MIN', rounded_mql_time(timedelta(minutes=30)), metric_query)
-      metric_query=re.sub('ROUNDED_15MIN', rounded_mql_time(timedelta(minutes=15)), metric_query)
-      metric_query=re.sub('ROUNDED_10MIN', rounded_mql_time(timedelta(minutes=10)), metric_query)
-      metric_query=re.sub('ROUNDED_5MIN', rounded_mql_time(timedelta(minutes=5)), metric_query)
-      msg_str=json.dumps({
-          'projects': [project],
-          'queries': {metric_name: metric_query},
-      })
-      data=msg_str.encode('utf-8')
-      futures[executor.submit(pubsub_client.publish, str(TARGET_PUBSUB_TOPIC), data)] = f"{project}:{metric_name}"
-  errors=[]
-  for fut in as_completed(futures):
-    try:
-      fut.result()
-    except Exception as err:
-      logging.exception(f"Failed to fanout for project {futures[fut]}: {err}")
-      errors.append(err)
-  if errors:
-    raise RuntimeError(f"Processing failed due to errors: {errors}")
-  else:
-    logging.info(f"Performed fanout for {len(queries)} queries on {len(futures)/len(queries)} projects.")
+def rounded_mql_time(delta):
+    return f"d'{(datetime.min + round((datetime.utcnow() - datetime.min)/delta) * delta).strftime('%Y/%m/%d %H:%M')}'"
+
+
+def process_config(scope, queries, asset_client: asset_v1.AssetServiceClient,
+                   pubsub_client: pubsub_v1.PublisherClient,
+                   executor: ThreadPoolExecutor):
+    futures = {}
+    req = asset_v1.ListAssetsRequest()
+    req.asset_types = ['compute.googleapis.com/Project']
+    req.parent = scope
+    req.page_size = 1000
+    res = asset_client.list_assets(request=req)
+    for asset in res:
+        project = asset.name.split('/')[-1]
+        for metric_name, metric_query in queries.items():
+            metric_query = re.sub('ROUNDED_HOUR',
+                                  rounded_mql_time(timedelta(minutes=60)),
+                                  metric_query)
+            metric_query = re.sub('ROUNDED_30MIN',
+                                  rounded_mql_time(timedelta(minutes=30)),
+                                  metric_query)
+            metric_query = re.sub('ROUNDED_15MIN',
+                                  rounded_mql_time(timedelta(minutes=15)),
+                                  metric_query)
+            metric_query = re.sub('ROUNDED_10MIN',
+                                  rounded_mql_time(timedelta(minutes=10)),
+                                  metric_query)
+            metric_query = re.sub('ROUNDED_5MIN',
+                                  rounded_mql_time(timedelta(minutes=5)),
+                                  metric_query)
+            msg_str = json.dumps({
+                'projects': [project],
+                'queries': {
+                    metric_name: metric_query
+                },
+            })
+            data = msg_str.encode('utf-8')
+            futures[executor.submit(pubsub_client.publish,
+                                    str(TARGET_PUBSUB_TOPIC),
+                                    data)] = f"{project}:{metric_name}"
+    errors = []
+    for fut in as_completed(futures):
+        try:
+            fut.result()
+        except Exception as err:
+            logging.exception(
+                f"Failed to fanout for project {futures[fut]}: {err}")
+            errors.append(err)
+    if errors:
+        raise RuntimeError(f"Processing failed due to errors: {errors}")
+    else:
+        logging.info(
+            f"Performed fanout for {len(queries)} queries on {len(futures)/len(queries)} projects."
+        )
+
 
 def multiplex(event, context):
-  """Background Cloud Function to be triggered by Pub/Sub.
+    """Background Cloud Function to be triggered by Pub/Sub.
   Args:
      event (dict):  The dictionary with data specific to this type of
             event. The `@type` field maps to
@@ -88,21 +110,22 @@ def multiplex(event, context):
     None. The output is written to Cloud Logging.
   """
 
-  data=json.loads(base64.b64decode(event['data']).decode('utf-8'))
+    data = json.loads(base64.b64decode(event['data']).decode('utf-8'))
 
-  job=data['job_name']
-  scope=data['scope']
-  metrics=data['metrics']
+    job = data['job_name']
+    scope = data['scope']
+    metrics = data['metrics']
 
-  logging.info(f"Running multiplexer for monitoring export job {job}")
+    logging.info(f"Running multiplexer for monitoring export job {job}")
 
-  asset_client = asset_v1.AssetServiceClient()
-  pubsub_client = pubsub_v1.PublisherClient()
+    asset_client = asset_v1.AssetServiceClient()
+    pubsub_client = pubsub_v1.PublisherClient()
 
-  with ThreadPoolExecutor(max_workers=50) as executor:
-    try:
-      process_config(scope, metrics, asset_client, pubsub_client, executor)
-    except Exception:
-      logging.exception(f"Monitoring export job {job} encountered errors!")
-      raise
-
+    with ThreadPoolExecutor(max_workers=50) as executor:
+        try:
+            process_config(scope, metrics, asset_client, pubsub_client,
+                           executor)
+        except Exception:
+            logging.exception(
+                f"Monitoring export job {job} encountered errors!")
+            raise

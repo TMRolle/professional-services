@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+
 PUBSUB_TOPIC = os.environ.get("PUBSUB_TOPIC")
 PROJECT_ID = os.environ.get('PROJECT_ID')
 BIGQUERY_DATASET = os.environ.get("BIGQUERY_DATASET")
