@@ -4,7 +4,7 @@
 
 ## Architecture
 
-![Architecture Diagram]('Monitoring Exporter Arch.svg')
+![Architecture Diagram]('/arch_diagram.svg')
 
 This module sets up a few key components in order to export Cloud Monitoring
 metrics across an org/folder/project.
