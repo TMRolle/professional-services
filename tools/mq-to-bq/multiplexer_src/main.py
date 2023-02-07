@@ -31,7 +31,7 @@ log_client=google.cloud.logging.Client()
 log_client.setup_logging()
 
 def rounded_mql_time(delta):
-  return f"d'{(datetime.min + round((datetime.now(timezone.utc) - datetime.min)/delta) * delta).strftime('%Y/%m/%d %H:%M')}'"
+  return f"d'{(datetime.min + round((datetime.utcnow() - datetime.min)/delta) * delta).strftime('%Y/%m/%d %H:%M')}'"
 
 def process_config(scope, queries, asset_client: asset_v1.AssetServiceClient, pubsub_client: pubsub_v1.PublisherClient, executor: ThreadPoolExecutor):
   futures={}
