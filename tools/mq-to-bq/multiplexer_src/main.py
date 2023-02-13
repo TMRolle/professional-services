@@ -34,6 +34,21 @@ log_client.setup_logging()
 def rounded_mql_time(delta):
     return f"d'{(datetime.min + round((datetime.utcnow() - datetime.min)/delta) * delta).strftime('%Y/%m/%d %H:%M')}'"
 
+def shard_by_node(project, query, asset_client: asset_v1.AssetServiceClient):
+  if re.search('GKE_NODE_NAME', query):
+    queries = []
+    req = asset_v1.ListAssetsRequest()
+    req.parent = f"projects/{project}"
+    req.asset_types = ["k8s.io/Node"]
+    req.page_size = 1000
+    res = asset_client.list_assets(request=req)
+    for asset in res:
+      node = asset.name.split('/')[-1]
+      queries.append(re.sub('GKE_NODE_NAME', node, query))
+    return queries
+  else:
+    return [query]
+
 
 def process_config(scope, queries, asset_client: asset_v1.AssetServiceClient,
                    pubsub_client: pubsub_v1.PublisherClient,
@@ -62,16 +77,17 @@ def process_config(scope, queries, asset_client: asset_v1.AssetServiceClient,
             metric_query = re.sub('ROUNDED_5MIN',
                                   rounded_mql_time(timedelta(minutes=5)),
                                   metric_query)
-            msg_str = json.dumps({
-                'projects': [project],
-                'queries': {
-                    metric_name: metric_query
-                },
-            })
-            data = msg_str.encode('utf-8')
-            futures[executor.submit(pubsub_client.publish,
-                                    str(TARGET_PUBSUB_TOPIC),
-                                    data)] = f"{project}:{metric_name}"
+            for sub_query in shard_by_node(project, metric_query, asset_client):
+              msg_str = json.dumps({
+                  'projects': [project],
+                  'queries': {
+                      metric_name: sub_query
+                  },
+              })
+              data = msg_str.encode('utf-8')
+              futures[executor.submit(pubsub_client.publish,
+                                      str(TARGET_PUBSUB_TOPIC),
+                                      data)] = f"{project}:{metric_name}"
     errors = []
     for fut in as_completed(futures):
         try:
