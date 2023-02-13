@@ -50,21 +50,25 @@ retry_policy = Retry(predicate=is_retryable)
 def rounded_mql_time(delta):
     return f"d'{(datetime.min + round((datetime.utcnow() - datetime.min)/delta) * delta).strftime('%Y/%m/%d %H:%M')}'"
 
-def shard_by_node(project, query, asset_client: asset_v1.AssetServiceClient):
+def shard_by_node(query, node_list):
   if re.search('GKE_NODE_NAME', query):
     queries = []
-    req = asset_v1.ListAssetsRequest()
-    req.parent = f"projects/{project}"
-    req.asset_types = ["k8s.io/Node"]
-    req.page_size = 1000
-    res = asset_client.list_assets(request=req, retry=retry_policy)
-    for asset in res:
-      node = asset.name.split('/')[-1]
+    for node in node_list:
       queries.append(re.sub('GKE_NODE_NAME', node, query))
     return queries
   else:
     return [query]
 
+def get_gke_nodes(project, asset_client: asset_v1.AssetServiceClient):
+  req = asset_v1.ListAssetsRequest()
+  req.parent = f"projects/{project}"
+  req.asset_types = ["k8s.io/Node"]
+  req.page_size = 1000
+  res = asset_client.list_assets(request=req, retry=retry_policy)
+  nodes=[]
+  for asset in res:
+    nodes.append(asset.name.split('/')[-1])
+  return nodes
 
 def process_config(scope, queries, asset_client: asset_v1.AssetServiceClient,
                    pubsub_client: pubsub_v1.PublisherClient,
@@ -77,6 +81,7 @@ def process_config(scope, queries, asset_client: asset_v1.AssetServiceClient,
     res = asset_client.list_assets(request=req, retry=retry_policy)
     for asset in res:
         project = asset.name.split('/')[-1]
+        gke_nodes = get_gke_nodes(project, asset_client)
         for metric_name, metric_query in queries.items():
             metric_query = re.sub('ROUNDED_HOUR',
                                   rounded_mql_time(timedelta(minutes=60)),
@@ -93,7 +98,7 @@ def process_config(scope, queries, asset_client: asset_v1.AssetServiceClient,
             metric_query = re.sub('ROUNDED_5MIN',
                                   rounded_mql_time(timedelta(minutes=5)),
                                   metric_query)
-            for sub_query in shard_by_node(project, metric_query, asset_client):
+            for sub_query in shard_by_node(metric_query, gke_nodes):
               msg_str = json.dumps({
                   'projects': [project],
                   'queries': {
