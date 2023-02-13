@@ -25,11 +25,27 @@ import re
 from datetime import datetime, timedelta, timezone
 import os
 
+from google.api_core.retry import Retry
+from google.api_core.exceptions import TooManyRequests, ResourceExhausted, InternalServerError, BadGateway, ServiceUnavailable
+
 TARGET_PUBSUB_TOPIC = os.environ.get("TARGET_PUBSUB_TOPIC")
 
 log_client = google.cloud.logging.Client()
 log_client.setup_logging()
 
+_RETRIABLE_TYPES = (
+    TooManyRequests,
+    InternalServerError,
+    BadGateway,
+    ServiceUnavailable,
+    ResourceExhausted,
+)
+
+
+def is_retryable(exc):
+    return isinstance(exc, _RETRIABLE_TYPES)
+
+retry_policy = Retry(predicate=is_retryable)
 
 def rounded_mql_time(delta):
     return f"d'{(datetime.min + round((datetime.utcnow() - datetime.min)/delta) * delta).strftime('%Y/%m/%d %H:%M')}'"
@@ -41,7 +57,7 @@ def shard_by_node(project, query, asset_client: asset_v1.AssetServiceClient):
     req.parent = f"projects/{project}"
     req.asset_types = ["k8s.io/Node"]
     req.page_size = 1000
-    res = asset_client.list_assets(request=req)
+    res = asset_client.list_assets(request=req, retry=retry_policy)
     for asset in res:
       node = asset.name.split('/')[-1]
       queries.append(re.sub('GKE_NODE_NAME', node, query))
@@ -58,7 +74,7 @@ def process_config(scope, queries, asset_client: asset_v1.AssetServiceClient,
     req.asset_types = ['compute.googleapis.com/Project']
     req.parent = scope
     req.page_size = 1000
-    res = asset_client.list_assets(request=req)
+    res = asset_client.list_assets(request=req, retry=retry_policy)
     for asset in res:
         project = asset.name.split('/')[-1]
         for metric_name, metric_query in queries.items():
